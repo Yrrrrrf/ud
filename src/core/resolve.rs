@@ -26,47 +26,249 @@ impl Scheme for SemverScheme {
     }
 }
 
+fn declared_version(constraint: &str) -> Option<SemVersion> {
+    let req = VersionReq::parse(constraint).ok()?;
+    let comp = req
+        .comparators
+        .iter()
+        .find(|c| !matches!(c.op, semver::Op::Less | semver::Op::LessEq));
+
+    let version = match comp {
+        Some(c) => SemVersion {
+            major: c.major,
+            minor: c.minor.unwrap_or(0),
+            patch: c.patch.unwrap_or(0),
+            pre: c.pre.clone(),
+            build: semver::BuildMetadata::EMPTY,
+        },
+        None => SemVersion {
+            major: 0,
+            minor: 0,
+            patch: 0,
+            pre: semver::Prerelease::EMPTY,
+            build: semver::BuildMetadata::EMPTY,
+        },
+    };
+    Some(version)
+}
+
 pub fn resolve(
     dependency: &Dependency,
     availability: &Availability,
     scheme: &dyn Scheme,
+    include_prerelease: bool,
 ) -> Verdict {
-    // For now, let's assume the constraint contains a version we can compare against.
-    // In a more complex resolver, we might need to know the current 'resolved' version.
-    // But for ud v1, we often just look at the manifest's declared version/constraint.
+    let mut parsed_candidates: Vec<(&crate::core::model::VersionMetadata, Option<SemVersion>)> =
+        availability
+            .versions
+            .iter()
+            .filter(|v| !v.yanked)
+            .filter(|v| include_prerelease || !v.prerelease)
+            .map(|v| {
+                let parsed = SemVersion::parse(&v.version.0).ok();
+                (v, parsed)
+            })
+            .collect();
 
-    // Attempt to treat the constraint as a concrete version for comparison purposes.
-    // This is a simplification that we might refine later.
-    let current_version = Version(dependency.constraint.0.clone());
-
-    let mut candidates: Vec<_> = availability.versions.iter().filter(|v| !v.yanked).collect();
-
-    if candidates.is_empty() {
+    if parsed_candidates.is_empty() {
         return Verdict::Unsatisfiable {
             constraint: dependency.constraint.clone(),
         };
     }
 
-    // Sort candidates using the scheme: newest last.
-    candidates.sort_by(|a, b| {
-        if scheme.is_newer(&a.version, &b.version) {
-            std::cmp::Ordering::Less
-        } else if scheme.is_newer(&b.version, &a.version) {
-            std::cmp::Ordering::Greater
-        } else {
-            std::cmp::Ordering::Equal
+    // Sort parsed_candidates: newest last.
+    parsed_candidates.sort_by(|a, b| {
+        match (&a.1, &b.1) {
+            (Some(av), Some(bv)) => av.cmp(bv),
+            (Some(_), None) => std::cmp::Ordering::Greater, // parseable is newer than unparseable
+            (None, Some(_)) => std::cmp::Ordering::Less,    // unparseable is older than parseable
+            (None, None) => a.0.version.0.cmp(&b.0.version.0), // fallback to lexicographical
         }
     });
 
-    let latest = candidates.last().unwrap();
+    let (latest_meta, _) = parsed_candidates.last().unwrap();
+    let latest_version = latest_meta.version.clone();
 
-    if scheme.is_newer(&current_version, &latest.version) {
+    let latest_pre = availability
+        .versions
+        .iter()
+        .filter(|v| !v.yanked && v.prerelease)
+        .filter_map(|v| {
+            let parsed = SemVersion::parse(&v.version.0).ok()?;
+            Some((v, parsed))
+        })
+        .max_by(|a, b| a.1.cmp(&b.1))
+        .map(|(v, _)| v.version.clone())
+        .filter(|lp| {
+            let lp_v = SemVersion::parse(&lp.0).ok();
+            let target_v = SemVersion::parse(&latest_version.0).ok();
+            match (lp_v, target_v) {
+                (Some(lp_v), Some(target_v)) => lp_v > target_v,
+                _ => false,
+            }
+        });
+
+    let declared_semver = declared_version(&dependency.constraint.0);
+    let declared_version = match &declared_semver {
+        Some(sv) => Version(sv.to_string()),
+        None => Version(dependency.constraint.0.clone()),
+    };
+
+    if scheme.is_newer(&declared_version, &latest_version) {
+        let breaking = !scheme.satisfies(&latest_version, &dependency.constraint);
         Verdict::Outdated {
-            target: latest.version.clone(),
+            target: latest_version,
+            breaking,
+            latest_pre,
         }
     } else {
         Verdict::Current {
-            latest: latest.version.clone(),
+            latest: latest_version,
+            latest_pre,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::model::{Coordinate, Span, VersionMetadata};
+
+    #[test]
+    fn test_declared_version() {
+        assert_eq!(
+            declared_version("1.36").unwrap(),
+            SemVersion::parse("1.36.0").unwrap()
+        );
+        assert_eq!(
+            declared_version("^1.2").unwrap(),
+            SemVersion::parse("1.2.0").unwrap()
+        );
+        assert_eq!(
+            declared_version(">=1, <2").unwrap(),
+            SemVersion::parse("1.0.0").unwrap()
+        );
+        assert_eq!(
+            declared_version("=2.3.4").unwrap(),
+            SemVersion::parse("2.3.4").unwrap()
+        );
+        assert_eq!(
+            declared_version("<2").unwrap(),
+            SemVersion::parse("0.0.0").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_resolve_partial_version() {
+        let dep = Dependency {
+            coordinate: Coordinate("tokio".into()),
+            constraint: crate::core::model::Constraint("1.36".into()),
+            span: Some(Span { start: 0, end: 0 }),
+            source_hint: None,
+        };
+        let avail = Availability {
+            versions: vec![
+                VersionMetadata {
+                    version: Version("1.36.0".into()),
+                    yanked: false,
+                    prerelease: false,
+                },
+                VersionMetadata {
+                    version: Version("1.45.0".into()),
+                    yanked: false,
+                    prerelease: false,
+                },
+            ],
+        };
+        let verdict = resolve(&dep, &avail, &SemverScheme, false);
+        assert_eq!(
+            verdict,
+            Verdict::Outdated {
+                target: Version("1.45.0".into()),
+                breaking: false,
+                latest_pre: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_resolve_compatible_and_breaking() {
+        let dep_compat = Dependency {
+            coordinate: Coordinate("serde".into()),
+            constraint: crate::core::model::Constraint("^1.2".into()),
+            span: Some(Span { start: 0, end: 0 }),
+            source_hint: None,
+        };
+        let avail = Availability {
+            versions: vec![
+                VersionMetadata {
+                    version: Version("1.2.0".into()),
+                    yanked: false,
+                    prerelease: false,
+                },
+                VersionMetadata {
+                    version: Version("1.9.0".into()),
+                    yanked: false,
+                    prerelease: false,
+                },
+                VersionMetadata {
+                    version: Version("2.0.0".into()),
+                    yanked: false,
+                    prerelease: false,
+                },
+            ],
+        };
+        // By default without filtering, 2.0.0 is the latest. Since 2.0.0 does not satisfy ^1.2, it is breaking.
+        assert_eq!(
+            resolve(&dep_compat, &avail, &SemverScheme, false),
+            Verdict::Outdated {
+                target: Version("2.0.0".into()),
+                breaking: true,
+                latest_pre: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_resolve_prerelease() {
+        let dep = Dependency {
+            coordinate: Coordinate("foo".into()),
+            constraint: crate::core::model::Constraint("^1.9".into()),
+            span: Some(Span { start: 0, end: 0 }),
+            source_hint: None,
+        };
+        let avail = Availability {
+            versions: vec![
+                VersionMetadata {
+                    version: Version("1.9.0".into()),
+                    yanked: false,
+                    prerelease: false,
+                },
+                VersionMetadata {
+                    version: Version("2.0.0-rc.1".into()),
+                    yanked: false,
+                    prerelease: true,
+                },
+            ],
+        };
+
+        // Excludes prerelease by default
+        assert_eq!(
+            resolve(&dep, &avail, &SemverScheme, false),
+            Verdict::Current {
+                latest: Version("1.9.0".into()),
+                latest_pre: Some(Version("2.0.0-rc.1".into())),
+            }
+        );
+
+        // Includes prerelease when opt-in
+        assert_eq!(
+            resolve(&dep, &avail, &SemverScheme, true),
+            Verdict::Outdated {
+                target: Version("2.0.0-rc.1".into()),
+                breaking: true,
+                latest_pre: None,
+            }
+        );
     }
 }

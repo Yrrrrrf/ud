@@ -1,1 +1,10 @@
-/target
+# all that start with a dot except .gitignore
+.*
+!.gitignore
+
+# lang generated files
+target/
+
+# doc
+# docs/
+

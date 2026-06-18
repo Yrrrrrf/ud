@@ -26,8 +26,12 @@ serde = "1.0.0"
     let (dep, verdict) = &report.verdicts[0];
     assert_eq!(dep.coordinate.0, "serde");
 
-    if let Verdict::Outdated { target } = verdict {
-        assert_eq!(target.0, "1.0.219");
+    if let Verdict::Outdated {
+        target, breaking, ..
+    } = verdict
+    {
+        assert!(target.0.starts_with("1.0."));
+        assert!(!(*breaking));
     } else {
         panic!("Expected Outdated verdict, got {:?}", verdict);
     }

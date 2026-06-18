@@ -10,7 +10,7 @@ same two letters cover the fix. Two keystrokes, one idea, every ecosystem.
 
 ## The problem
 
-[dependi](https://github.com/filllabs/dependi) is the best dependency-version
+[dependi](https://github.com/Yrrrrrf/dependi) is the best dependency-version
 inspector we have, and it has one structural flaw that caps everything it can
 become: **it only exists inside VS Code.** Its dependency logic isn't a library
 an editor uses — the logic _is_ the editor integration. Its core type carries a

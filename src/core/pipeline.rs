@@ -4,13 +4,26 @@ use std::path::Path;
 
 pub struct Pipeline {
     ecosystems: Vec<Box<dyn Ecosystem>>,
+    include_prerelease: bool,
+}
+
+impl Default for Pipeline {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Pipeline {
     pub fn new() -> Self {
         Self {
             ecosystems: Vec::new(),
+            include_prerelease: false,
         }
+    }
+
+    pub fn with_prerelease(mut self, include_prerelease: bool) -> Self {
+        self.include_prerelease = include_prerelease;
+        self
     }
 
     pub fn register(&mut self, ecosystem: Box<dyn Ecosystem>) {
@@ -45,12 +58,18 @@ impl Pipeline {
 
         // 3. RESOLVE (in parallel §5)
         let mut futures = Vec::new();
+        let include_prerelease = self.include_prerelease;
         for dep in deps {
             futures.push(async move {
                 let availability = eco.source(&dep.coordinate).await;
                 match availability {
                     Ok(avail) => {
-                        let verdict = crate::core::resolve::resolve(&dep, &avail, eco.scheme());
+                        let verdict = crate::core::resolve::resolve(
+                            &dep,
+                            &avail,
+                            eco.scheme(),
+                            include_prerelease,
+                        );
                         (dep, verdict)
                     }
                     Err(e) => (dep, Verdict::Errored(e.to_string())),
@@ -58,7 +77,12 @@ impl Pipeline {
             });
         }
 
-        let results = futures::future::join_all(futures).await;
+        use futures::StreamExt;
+        let results = futures::stream::iter(futures)
+            .buffer_unordered(crate::core::runtime::MAX_CONCURRENT_REQUESTS)
+            .collect::<Vec<_>>()
+            .await;
+
         for (dep, verdict) in results {
             report.push(dep, verdict);
         }

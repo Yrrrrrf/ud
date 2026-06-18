@@ -17,7 +17,6 @@ from rich.progress import (
     TaskProgressColumn,
 )
 from rich.table import Table
-from rich.live import Live
 
 # crates.io Sparse Index URL for 1-2 letter crates: https://index.crates.io/2/{crate_name}
 BASE_URL = "https://index.crates.io/2/{}"

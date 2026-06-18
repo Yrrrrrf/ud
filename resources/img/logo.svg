@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="256" height="256">
+  <!-- ========================================== -->
+  <!-- SURGICAL DELTA DART (EMBEDDED CORE)        -->
+  <!-- ========================================== -->
+
+  <!-- THE CURRENT STATE (The heavy, upward dart) -->
+  <!-- Left Wing (Bright Teal) -->
+  <polygon points="49,25 9,95 49,60" fill="#66C2A5" />
+  <!-- Left Inner Facet (Deep Teal) -->
+  <polygon points="9,95 49,85 49,60" fill="#3B8A73" />
+
+  <!-- Right Wing (Bright Blue) -->
+  <polygon points="51,25 91,95 51,60" fill="#58A6FF" />
+  <!-- Right Inner Facet (Deep Blue) -->
+  <polygon points="91,95 51,85 51,60" fill="#246BB3" />
+
+  <!-- THE TARGET CRYSTAL (Embedded inside) -->
+  <!-- Left Half (Bright Magenta) -->
+  <polygon points="49,45 38,60 49,75" fill="#D273FF" />
+  <!-- Right Half (Deep Magenta) -->
+  <polygon points="51,45 62,60 51,75" fill="#A742D6" />
+
+</svg>

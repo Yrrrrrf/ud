@@ -9,14 +9,18 @@ build:
 test:
     cargo test
 
-# Check a manifest in preview mode (dry-run)
+# Check a manifest in check mode (dry-run)
 preview path=fixture: build
-    {{ud}} {{path}} -y
-
-# Update a manifest losslessly (default behavior)
-update path=fixture: build
     {{ud}} {{path}}
+
+# Update a manifest losslessly
+update path=fixture: build
+    {{ud}} {{path}} -u
 
 # Show the entire dependency tree
 tree path=fixture: build
     {{ud}} tree {{path}}
+
+
+fmt:
+    cargo fmt

@@ -1,5 +1,5 @@
 <h1 align="center">
-<img src="https://raw.githubusercontent.com/filllabs/ud/main/assets/img/icon.png" alt="ud Icon" width="128" height="128">
+<img src="https://raw.githubusercontent.com/Yrrrrrf/ud/main/assets/img/icon.png" alt="ud Icon" width="128" height="128">
 
 ud
 
@@ -8,7 +8,7 @@ ud
 
 <!-- CORE BADGES -->
 
-[![GitHub: Repo](https://img.shields.io/badge/ud-58A6FF?&logo=github)](https://github.com/filllabs/ud)
+[![GitHub: Repo](https://img.shields.io/badge/ud-58A6FF?&logo=github)](https://github.com/Yrrrrrf/ud)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 <!-- Rust based projects -->
