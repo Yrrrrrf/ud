@@ -52,6 +52,16 @@ fn declared_version(constraint: &str) -> Option<SemVersion> {
     Some(version)
 }
 
+pub fn is_actual_upgrade(constraint: &str, target: &str) -> bool {
+    let parsed_target = SemVersion::parse(target).ok();
+    let base_version = declared_version(constraint);
+
+    match (parsed_target, base_version) {
+        (Some(t), Some(b)) => t > b,
+        _ => target != constraint,
+    }
+}
+
 pub fn resolve(
     dependency: &Dependency,
     availability: &Availability,

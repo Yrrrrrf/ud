@@ -138,20 +138,22 @@ fn apply_edit(doc: &mut DocumentMut, dep: &Dependency, new_version: &Version) {
     }
 
     // Handle target-specific deps (section starts with "target.")
-    if section.starts_with("target.") {
-        // section looks like: target.'cfg(...)'.dependencies
-        // We need to navigate: doc["target"][<target_key>][<dep_section>]
-        if let Some(target_table) = doc.get_mut("target").and_then(|t| t.as_table_like_mut()) {
-            for (_target_name, target_val) in target_table.iter_mut() {
-                for dep_section in &["dependencies", "dev-dependencies", "build-dependencies"] {
-                    if let Some(table) = target_val
-                        .get_mut(dep_section)
-                        .and_then(|v| v.as_table_like_mut())
-                        && let Some(item) = table.get_mut(&dep.coordinate.0)
-                    {
-                        update_table_item(item, new_version);
-                    }
-                }
+    if let Some(trimmed) = section.strip_prefix("target.") {
+        // section looks like: target.<target_name>.<sub-section>
+        if let Some(last_dot_idx) = trimmed.rfind('.') {
+            let target_name = &trimmed[..last_dot_idx];
+            let dep_section = &trimmed[last_dot_idx + 1..];
+
+            if let Some(target_val) = doc
+                .get_mut("target")
+                .and_then(|t| t.as_table_like_mut())
+                .and_then(|t| t.get_mut(target_name))
+                && let Some(table) = target_val
+                    .get_mut(dep_section)
+                    .and_then(|v| v.as_table_like_mut())
+                && let Some(item) = table.get_mut(&dep.coordinate.0)
+            {
+                update_table_item(item, new_version);
             }
         }
         return;
@@ -530,5 +532,38 @@ linux-dep = "0.4.5"
             .await
             .unwrap();
         assert!(updated_content2.contains("linux-dep = \"0.4.6\""));
+    }
+
+    #[tokio::test]
+    async fn test_target_specific_update_isolation() {
+        let content = r#"
+[target.'cfg(target_os = "linux")'.dependencies]
+serde = "1.0.0"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+serde = "1.0.1"
+"#;
+        let eco = CargoEcosystem::new();
+        let deps = eco.read(content).await.unwrap();
+        assert_eq!(deps.len(), 2);
+
+        let linux_serde = deps
+            .iter()
+            .find(|d| d.section.as_ref().unwrap().contains("linux"))
+            .unwrap();
+
+        let new_version = Version("1.0.2".to_string());
+        let updated_content = eco.write(content, linux_serde, &new_version).await.unwrap();
+
+        // Check that only the linux target got updated, and windows target was untouched
+        assert!(
+            updated_content
+                .contains("[target.'cfg(target_os = \"linux\")'.dependencies]\nserde = \"1.0.2\"")
+        );
+        assert!(
+            updated_content.contains(
+                "[target.'cfg(target_os = \"windows\")'.dependencies]\nserde = \"1.0.1\""
+            )
+        );
     }
 }

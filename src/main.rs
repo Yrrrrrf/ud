@@ -98,8 +98,8 @@ async fn run() -> miette::Result<bool> {
 
     let should_update = cli.update && !is_tree;
 
-    if !cli.update && !is_tree {
-        println!(
+    if !cli.update && !is_tree && !cli.json {
+        eprintln!(
             "{}",
             "Check mode: no changes will be made"
                 .bright_black()
@@ -132,7 +132,9 @@ async fn run() -> miette::Result<bool> {
                     compatible.as_ref()
                 };
 
-                if let Some(version) = target {
+                if let Some(version) = target
+                    && ud::core::is_actual_upgrade(&dep.constraint.0, &version.0)
+                {
                     edits.push((dep, version));
                 }
             }

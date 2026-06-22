@@ -7,3 +7,4 @@ pub mod runtime;
 
 pub use contract::{Ecosystem, Scheme};
 pub use model::*;
+pub use resolve::is_actual_upgrade;

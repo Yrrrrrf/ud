@@ -1,6 +1,6 @@
 [package]
 name = "ud"
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 description = "UpDate! — A fast, universal dependency updater."
 authors = ["Yrrrrrf <fer.rezac@outlook.com>"]
@@ -29,9 +29,10 @@ semver = "1.0.28"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["full"] }
-toml_edit = "0.25.12"
+toml_edit = "0.25.12+spec-1.1.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+wiremock = "0.6.5"

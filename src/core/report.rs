@@ -78,7 +78,9 @@ impl HumanReporter {
                         pre_suffix,
                     ));
 
-                    if should_update {
+                    if should_update
+                        && crate::core::is_actual_upgrade(&dep.constraint.0, &effective_target.0)
+                    {
                         buf.push_str(&format!("    {}\n", "Updated!".green().italic()));
                     }
                 }
