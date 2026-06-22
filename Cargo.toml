@@ -1,12 +1,15 @@
 [package]
 name = "ud"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2024"
-description = "UpDate your dependencies!"
+description = "UpDate! — A fast, universal dependency updater."
 authors = ["Yrrrrrf <fer.rezac@outlook.com>"]
-documentation = "http://docs.rs/ud"
+documentation = "https://docs.rs/ud"
 repository = "https://github.com/Yrrrrrf/ud"
 license = "MIT"
+readme = "README.md"
+keywords = ["dependencies", "updater", "cargo", "semver"]
+categories = ["command-line-utilities", "development-tools"]
 
 # add optimizations for the dependencies
 [profile.release]
@@ -21,11 +24,10 @@ derive_more = { version = "2.1.1", features = ["full"] }
 futures = "0.3.32"
 miette = { version = "7.6.0", features = ["fancy"] }
 owo-colors = "4.3.0"
-reqwest = { version = "0.13.4", features = ["json"] }
+reqwest = "0.13.4"
 semver = "1.0.28"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
-thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
 toml_edit = "0.25.12"
 tracing = "0.1.44"

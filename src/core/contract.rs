@@ -36,6 +36,20 @@ pub trait Ecosystem: Send + Sync {
             self.name()
         ))
     }
+
+    /// Optional: Write a batch of edits in a single pass.
+    /// Default implementation calls `write()` sequentially (override for efficiency).
+    async fn write_batch(
+        &self,
+        content: &str,
+        edits: &[(&Dependency, &Version)],
+    ) -> miette::Result<String> {
+        let mut result = content.to_string();
+        for (dep, version) in edits {
+            result = self.write(&result, dep, version).await?;
+        }
+        Ok(result)
+    }
 }
 
 /// A Version Scheme provides the rules for ordering versions and testing constraints.

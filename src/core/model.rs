@@ -27,6 +27,9 @@ pub struct Dependency {
     pub constraint: Constraint,
     pub span: Option<Span>,
     pub source_hint: Option<String>,
+    /// Which TOML section this dep lives in (e.g. "dependencies", "dev-dependencies",
+    /// "workspace.dependencies", "target.'cfg(...)'.dependencies").
+    pub section: Option<String>,
 }
 
 /// Availability — what a source returns for a coordinate.
@@ -52,8 +55,11 @@ pub enum Verdict {
         latest_pre: Option<Version>,
     },
     Outdated {
-        target: Version,
-        breaking: bool,
+        /// The latest version that still satisfies the declared constraint (compatible bump).
+        compatible: Option<Version>,
+        /// The absolute latest stable version (may be a breaking jump).
+        latest: Version,
+        /// The latest prerelease version (if newer than `latest`).
         latest_pre: Option<Version>,
     },
     Yanked,

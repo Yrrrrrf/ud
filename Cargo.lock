@@ -1233,8 +1233,6 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
- "serde",
- "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -1915,7 +1913,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "ud"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "async-trait",
  "clap",
@@ -1928,7 +1926,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror",
  "tokio",
  "toml_edit",
  "tracing",

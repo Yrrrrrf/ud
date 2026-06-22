@@ -27,19 +27,39 @@ impl HumanReporter {
                     }
                 }
                 Verdict::Outdated {
-                    target,
-                    breaking: _,
+                    compatible,
+                    latest,
                     latest_pre,
                 } => {
-                    let old_str = format_old_constraint(&dep.constraint.0, &target.0);
-                    let target_str = if is_prerelease(&target.0) {
-                        target.0.magenta().to_string()
+                    // Determine the effective update target
+                    let effective_target = compatible.as_ref().unwrap_or(latest);
+                    let old_str = format_old_constraint(&dep.constraint.0, &effective_target.0);
+                    let target_str = if is_prerelease(&effective_target.0) {
+                        effective_target.0.magenta().to_string()
                     } else {
-                        target.0.green().to_string()
+                        effective_target.0.green().to_string()
+                    };
+
+                    // Show breaking latest if it differs from compatible
+                    let breaking_suffix = match compatible {
+                        Some(compat) if compat.0 != latest.0 => format!(" (latest: {})", latest.0)
+                            .bright_black()
+                            .dimmed()
+                            .italic()
+                            .to_string(),
+                        None => {
+                            // No compatible version — latest is breaking-only
+                            format!(" (breaking: {})", latest.0)
+                                .yellow()
+                                .dimmed()
+                                .italic()
+                                .to_string()
+                        }
+                        _ => String::new(),
                     };
 
                     let pre_suffix = if let Some(pre) = latest_pre {
-                        format!(" ({})", pre.0)
+                        format!(" (pre: {})", pre.0)
                             .magenta()
                             .dimmed()
                             .italic()
@@ -49,11 +69,12 @@ impl HumanReporter {
                     };
 
                     buf.push_str(&format!(
-                        "  {} {} {} {}{}\n",
+                        "  {} {} {} {}{}{}\n",
                         dep.coordinate.0,
                         old_str,
                         "→".bright_black(),
                         target_str,
+                        breaking_suffix,
                         pre_suffix,
                     ));
 

@@ -3,7 +3,10 @@ use ud::core::model::Verdict;
 use ud::core::pipeline::Pipeline;
 use ud::ecosystems::cargo::CargoEcosystem;
 
+/// This test hits the live crates.io network — gate it with #[ignore].
+/// Run explicitly with: cargo test -- --ignored
 #[tokio::test]
+#[ignore]
 async fn test_pipeline_cargo_integration() {
     let temp_dir = tempfile::tempdir().unwrap();
     let file_path = temp_dir.path().join("Cargo.toml");
@@ -27,11 +30,12 @@ serde = "1.0.0"
     assert_eq!(dep.coordinate.0, "serde");
 
     if let Verdict::Outdated {
-        target, breaking, ..
+        compatible, latest, ..
     } = verdict
     {
-        assert!(target.0.starts_with("1.0."));
-        assert!(!(*breaking));
+        assert!(latest.0.starts_with("1.0."));
+        // serde 1.0.0 with ^1.0.0 constraint — compatible should exist
+        assert!(compatible.is_some());
     } else {
         panic!("Expected Outdated verdict, got {:?}", verdict);
     }

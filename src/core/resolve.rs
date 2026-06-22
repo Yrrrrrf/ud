@@ -77,18 +77,24 @@ pub fn resolve(
     }
 
     // Sort parsed_candidates: newest last.
-    parsed_candidates.sort_by(|a, b| {
-        match (&a.1, &b.1) {
-            (Some(av), Some(bv)) => av.cmp(bv),
-            (Some(_), None) => std::cmp::Ordering::Greater, // parseable is newer than unparseable
-            (None, Some(_)) => std::cmp::Ordering::Less,    // unparseable is older than parseable
-            (None, None) => a.0.version.0.cmp(&b.0.version.0), // fallback to lexicographical
-        }
+    parsed_candidates.sort_by(|a, b| match (&a.1, &b.1) {
+        (Some(av), Some(bv)) => av.cmp(bv),
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (None, None) => a.0.version.0.cmp(&b.0.version.0),
     });
 
     let (latest_meta, _) = parsed_candidates.last().unwrap();
     let latest_version = latest_meta.version.clone();
 
+    // Compute the latest compatible version (satisfies the declared constraint)
+    let latest_compatible = parsed_candidates
+        .iter()
+        .rev()
+        .find(|(meta, _)| scheme.satisfies(&meta.version, &dependency.constraint))
+        .map(|(meta, _)| meta.version.clone());
+
+    // Compute the latest prerelease (if newer than latest stable)
     let latest_pre = availability
         .versions
         .iter()
@@ -115,10 +121,9 @@ pub fn resolve(
     };
 
     if scheme.is_newer(&declared_version, &latest_version) {
-        let breaking = !scheme.satisfies(&latest_version, &dependency.constraint);
         Verdict::Outdated {
-            target: latest_version,
-            breaking,
+            compatible: latest_compatible,
+            latest: latest_version,
             latest_pre,
         }
     } else {
@@ -165,6 +170,7 @@ mod tests {
             constraint: crate::core::model::Constraint("1.36".into()),
             span: Some(Span { start: 0, end: 0 }),
             source_hint: None,
+            section: None,
         };
         let avail = Availability {
             versions: vec![
@@ -184,8 +190,8 @@ mod tests {
         assert_eq!(
             verdict,
             Verdict::Outdated {
-                target: Version("1.45.0".into()),
-                breaking: false,
+                compatible: Some(Version("1.45.0".into())),
+                latest: Version("1.45.0".into()),
                 latest_pre: None,
             }
         );
@@ -193,11 +199,12 @@ mod tests {
 
     #[test]
     fn test_resolve_compatible_and_breaking() {
-        let dep_compat = Dependency {
+        let dep = Dependency {
             coordinate: Coordinate("serde".into()),
             constraint: crate::core::model::Constraint("^1.2".into()),
             span: Some(Span { start: 0, end: 0 }),
             source_hint: None,
+            section: None,
         };
         let avail = Availability {
             versions: vec![
@@ -218,12 +225,13 @@ mod tests {
                 },
             ],
         };
-        // By default without filtering, 2.0.0 is the latest. Since 2.0.0 does not satisfy ^1.2, it is breaking.
+        // latest is 2.0.0, but compatible (satisfying ^1.2) is 1.9.0
+        let verdict = resolve(&dep, &avail, &SemverScheme, false);
         assert_eq!(
-            resolve(&dep_compat, &avail, &SemverScheme, false),
+            verdict,
             Verdict::Outdated {
-                target: Version("2.0.0".into()),
-                breaking: true,
+                compatible: Some(Version("1.9.0".into())),
+                latest: Version("2.0.0".into()),
                 latest_pre: None,
             }
         );
@@ -236,6 +244,7 @@ mod tests {
             constraint: crate::core::model::Constraint("^1.9".into()),
             span: Some(Span { start: 0, end: 0 }),
             source_hint: None,
+            section: None,
         };
         let avail = Availability {
             versions: vec![
@@ -261,12 +270,53 @@ mod tests {
             }
         );
 
-        // Includes prerelease when opt-in
+        // Includes prerelease when opt-in — 2.0.0-rc.1 is the latest overall,
+        // but 1.9.0 still satisfies ^1.9 so it's the compatible target.
         assert_eq!(
             resolve(&dep, &avail, &SemverScheme, true),
             Verdict::Outdated {
-                target: Version("2.0.0-rc.1".into()),
-                breaking: true,
+                compatible: Some(Version("1.9.0".into())),
+                latest: Version("2.0.0-rc.1".into()),
+                latest_pre: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_resolve_0x_breaking() {
+        // For 0.x crates, minor bumps are breaking under semver caret rules
+        let dep = Dependency {
+            coordinate: Coordinate("tower".into()),
+            constraint: crate::core::model::Constraint("^0.4.13".into()),
+            span: None,
+            source_hint: None,
+            section: None,
+        };
+        let avail = Availability {
+            versions: vec![
+                VersionMetadata {
+                    version: Version("0.4.13".into()),
+                    yanked: false,
+                    prerelease: false,
+                },
+                VersionMetadata {
+                    version: Version("0.4.15".into()),
+                    yanked: false,
+                    prerelease: false,
+                },
+                VersionMetadata {
+                    version: Version("0.5.2".into()),
+                    yanked: false,
+                    prerelease: false,
+                },
+            ],
+        };
+        let verdict = resolve(&dep, &avail, &SemverScheme, false);
+        assert_eq!(
+            verdict,
+            Verdict::Outdated {
+                compatible: Some(Version("0.4.15".into())),
+                latest: Version("0.5.2".into()),
                 latest_pre: None,
             }
         );

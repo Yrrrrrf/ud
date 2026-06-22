@@ -36,6 +36,7 @@ impl Pipeline {
         let mut matching_ecosystems = Vec::new();
         for eco in &self.ecosystems {
             if eco.detect(path, content.as_deref()).await {
+                tracing::debug!(ecosystem = eco.name(), path = %path.display(), "detected ecosystem");
                 matching_ecosystems.push(eco);
             }
         }
@@ -54,6 +55,8 @@ impl Pipeline {
 
         // 2. READ
         let deps = eco.read(&content).await?;
+        tracing::debug!(count = deps.len(), "read dependencies from manifest");
+
         let mut report = Report::new();
 
         // 3. RESOLVE (in parallel §5)
@@ -69,6 +72,11 @@ impl Pipeline {
                             &avail,
                             eco.scheme(),
                             include_prerelease,
+                        );
+                        tracing::debug!(
+                            coordinate = %dep.coordinate.0,
+                            verdict = ?verdict,
+                            "resolved"
                         );
                         (dep, verdict)
                     }

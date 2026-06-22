@@ -34,6 +34,7 @@ fn sparse_index_path(name: &str) -> String {
 
 pub struct CargoEcosystem {
     client: reqwest::Client,
+    base_url: String,
 }
 
 impl Default for CargoEcosystem {
@@ -49,11 +50,23 @@ impl CargoEcosystem {
                 .user_agent("ud (https://github.com/Yrrrrrf/ud)")
                 .build()
                 .unwrap(),
+            base_url: "https://index.crates.io".to_string(),
+        }
+    }
+
+    /// Create an instance with a custom base URL (for testing with wiremock).
+    pub fn with_base_url(base_url: &str) -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .user_agent("ud (https://github.com/Yrrrrrf/ud)")
+                .build()
+                .unwrap(),
+            base_url: base_url.to_string(),
         }
     }
 }
 
-fn parse_table(table: &dyn toml_edit::TableLike, deps: &mut Vec<Dependency>) {
+fn parse_table(table: &dyn toml_edit::TableLike, section: &str, deps: &mut Vec<Dependency>) {
     for (name, value) in table.iter() {
         let coordinate = Coordinate(name.to_string());
 
@@ -75,6 +88,7 @@ fn parse_table(table: &dyn toml_edit::TableLike, deps: &mut Vec<Dependency>) {
             constraint,
             span,
             source_hint: None,
+            section: Some(section.to_string()),
         });
     }
 }
@@ -103,6 +117,54 @@ fn update_table_item(item: &mut toml_edit::Item, new_version: &Version) {
     }
 }
 
+/// Apply a single edit to the document, targeting a specific section + coordinate.
+fn apply_edit(doc: &mut DocumentMut, dep: &Dependency, new_version: &Version) {
+    let section = match &dep.section {
+        Some(s) => s.as_str(),
+        None => return, // no section info — skip
+    };
+
+    // Handle workspace.dependencies
+    if section == "workspace.dependencies" {
+        if let Some(table) = doc
+            .get_mut("workspace")
+            .and_then(|w| w.get_mut("dependencies"))
+            .and_then(|v| v.as_table_like_mut())
+            && let Some(item) = table.get_mut(&dep.coordinate.0)
+        {
+            update_table_item(item, new_version);
+        }
+        return;
+    }
+
+    // Handle target-specific deps (section starts with "target.")
+    if section.starts_with("target.") {
+        // section looks like: target.'cfg(...)'.dependencies
+        // We need to navigate: doc["target"][<target_key>][<dep_section>]
+        if let Some(target_table) = doc.get_mut("target").and_then(|t| t.as_table_like_mut()) {
+            for (_target_name, target_val) in target_table.iter_mut() {
+                for dep_section in &["dependencies", "dev-dependencies", "build-dependencies"] {
+                    if let Some(table) = target_val
+                        .get_mut(dep_section)
+                        .and_then(|v| v.as_table_like_mut())
+                        && let Some(item) = table.get_mut(&dep.coordinate.0)
+                    {
+                        update_table_item(item, new_version);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // Handle root-level sections (dependencies, dev-dependencies, build-dependencies)
+    if let Some(table) = doc.get_mut(section).and_then(|v| v.as_table_like_mut())
+        && let Some(item) = table.get_mut(&dep.coordinate.0)
+    {
+        update_table_item(item, new_version);
+    }
+}
+
 #[async_trait]
 impl Ecosystem for CargoEcosystem {
     fn name(&self) -> &'static str {
@@ -123,7 +185,7 @@ impl Ecosystem for CargoEcosystem {
         // 1. Root dependencies
         for section in &["dependencies", "dev-dependencies", "build-dependencies"] {
             if let Some(table) = doc.get(section).and_then(|v| v.as_table_like()) {
-                parse_table(table, &mut deps);
+                parse_table(table, section, &mut deps);
             }
         }
 
@@ -133,15 +195,16 @@ impl Ecosystem for CargoEcosystem {
             .and_then(|w| w.get("dependencies"))
             .and_then(|v| v.as_table_like())
         {
-            parse_table(table, &mut deps);
+            parse_table(table, "workspace.dependencies", &mut deps);
         }
 
         // 3. Target-specific dependencies
         if let Some(target_table) = doc.get("target").and_then(|t| t.as_table_like()) {
-            for (_target_name, target_val) in target_table.iter() {
+            for (target_name, target_val) in target_table.iter() {
                 for section in &["dependencies", "dev-dependencies", "build-dependencies"] {
                     if let Some(table) = target_val.get(section).and_then(|v| v.as_table_like()) {
-                        parse_table(table, &mut deps);
+                        let full_section = format!("target.{}.{}", target_name, section);
+                        parse_table(table, &full_section, &mut deps);
                     }
                 }
             }
@@ -152,7 +215,10 @@ impl Ecosystem for CargoEcosystem {
 
     async fn source(&self, coordinate: &Coordinate) -> miette::Result<Availability> {
         let path = sparse_index_path(&coordinate.0);
-        let url = format!("https://index.crates.io/{}", path);
+        let url = format!("{}/{}", self.base_url, path);
+
+        tracing::debug!(crate_name = %coordinate.0, url = %url, "fetching index");
+
         let res = self
             .client
             .get(&url)
@@ -220,38 +286,27 @@ impl Ecosystem for CargoEcosystem {
             .parse()
             .map_err(|e| miette::miette!("Failed to parse Cargo.toml: {}", e))?;
 
-        // 1. Root dependencies
-        for section in &["dependencies", "dev-dependencies", "build-dependencies"] {
-            if let Some(table) = doc.get_mut(section).and_then(|v| v.as_table_like_mut())
-                && let Some(item) = table.get_mut(&dependency.coordinate.0)
-            {
-                update_table_item(item, new_version);
-            }
-        }
+        apply_edit(&mut doc, dependency, new_version);
+        Ok(doc.to_string())
+    }
 
-        // 2. Workspace dependencies
-        if let Some(table) = doc
-            .get_mut("workspace")
-            .and_then(|w| w.get_mut("dependencies"))
-            .and_then(|v| v.as_table_like_mut())
-            && let Some(item) = table.get_mut(&dependency.coordinate.0)
-        {
-            update_table_item(item, new_version);
-        }
+    async fn write_batch(
+        &self,
+        content: &str,
+        edits: &[(&Dependency, &Version)],
+    ) -> miette::Result<String> {
+        let mut doc: DocumentMut = content
+            .parse()
+            .map_err(|e| miette::miette!("Failed to parse Cargo.toml: {}", e))?;
 
-        // 3. Target dependencies
-        if let Some(target_table) = doc.get_mut("target").and_then(|t| t.as_table_like_mut()) {
-            for (_target_name, target_val) in target_table.iter_mut() {
-                for section in &["dependencies", "dev-dependencies", "build-dependencies"] {
-                    if let Some(table) = target_val
-                        .get_mut(section)
-                        .and_then(|v| v.as_table_like_mut())
-                        && let Some(item) = table.get_mut(&dependency.coordinate.0)
-                    {
-                        update_table_item(item, new_version);
-                    }
-                }
-            }
+        for (dep, version) in edits {
+            tracing::debug!(
+                coordinate = %dep.coordinate.0,
+                section = ?dep.section,
+                new_version = %version.0,
+                "applying edit"
+            );
+            apply_edit(&mut doc, dep, version);
         }
 
         Ok(doc.to_string())
@@ -278,6 +333,7 @@ tokio = { version = "1.0", features = ["full"] }
         assert_eq!(deps.len(), 2);
         assert_eq!(deps[0].coordinate.0, "serde");
         assert_eq!(deps[0].constraint.0, "1.0.0");
+        assert_eq!(deps[0].section, Some("dependencies".to_string()));
         assert_eq!(deps[1].coordinate.0, "tokio");
         assert_eq!(deps[1].constraint.0, "1.0");
     }
@@ -294,11 +350,115 @@ serde = "1.0.0" # some comment
             constraint: Constraint("1.0.0".to_string()),
             span: Some(Span { start: 0, end: 0 }),
             source_hint: None,
+            section: Some("dependencies".to_string()),
         };
         let new_version = Version("1.0.219".to_string());
         let new_content = eco.write(content, &dep, &new_version).await.unwrap();
         assert!(new_content.contains("serde = \"1.0.219\""));
         assert!(new_content.contains("# some comment"));
+    }
+
+    #[tokio::test]
+    async fn test_write_batch_single_pass() {
+        let content = r#"
+[dependencies]
+serde = "1.0.0"
+tokio = "1.36.0"
+
+[dev-dependencies]
+tempfile = "3.10.0"
+"#;
+        let eco = CargoEcosystem::new();
+        let dep1 = Dependency {
+            coordinate: Coordinate("serde".into()),
+            constraint: Constraint("1.0.0".into()),
+            span: None,
+            source_hint: None,
+            section: Some("dependencies".into()),
+        };
+        let dep2 = Dependency {
+            coordinate: Coordinate("tokio".into()),
+            constraint: Constraint("1.36.0".into()),
+            span: None,
+            source_hint: None,
+            section: Some("dependencies".into()),
+        };
+        let dep3 = Dependency {
+            coordinate: Coordinate("tempfile".into()),
+            constraint: Constraint("3.10.0".into()),
+            span: None,
+            source_hint: None,
+            section: Some("dev-dependencies".into()),
+        };
+
+        let v1 = Version("1.0.219".into());
+        let v2 = Version("1.45.0".into());
+        let v3 = Version("3.27.0".into());
+
+        let edits: Vec<(&Dependency, &Version)> = vec![(&dep1, &v1), (&dep2, &v2), (&dep3, &v3)];
+        let result = eco.write_batch(content, &edits).await.unwrap();
+
+        assert!(result.contains("serde = \"1.0.219\""));
+        assert!(result.contains("tokio = \"1.45.0\""));
+        assert!(result.contains("tempfile = \"3.27.0\""));
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_coordinate_different_sections() {
+        let content = r#"
+[dependencies]
+serde = "1.0.0"
+
+[dev-dependencies]
+serde = "1.0.5"
+"#;
+        let eco = CargoEcosystem::new();
+        let dep_main = Dependency {
+            coordinate: Coordinate("serde".into()),
+            constraint: Constraint("1.0.0".into()),
+            span: None,
+            source_hint: None,
+            section: Some("dependencies".into()),
+        };
+        let dep_dev = Dependency {
+            coordinate: Coordinate("serde".into()),
+            constraint: Constraint("1.0.5".into()),
+            span: None,
+            source_hint: None,
+            section: Some("dev-dependencies".into()),
+        };
+
+        let v_main = Version("1.0.219".into());
+        let v_dev = Version("1.0.230".into());
+
+        let edits: Vec<(&Dependency, &Version)> = vec![(&dep_main, &v_main), (&dep_dev, &v_dev)];
+        let result = eco.write_batch(content, &edits).await.unwrap();
+
+        // Each section should have its own version
+        assert!(result.contains("[dependencies]\nserde = \"1.0.219\""));
+        assert!(result.contains("[dev-dependencies]\nserde = \"1.0.230\""));
+    }
+
+    #[tokio::test]
+    async fn test_write_idempotent() {
+        let content = r#"
+[dependencies]
+serde = "1.0.219"
+"#;
+        let eco = CargoEcosystem::new();
+        let dep = Dependency {
+            coordinate: Coordinate("serde".into()),
+            constraint: Constraint("1.0.219".into()),
+            span: None,
+            source_hint: None,
+            section: Some("dependencies".into()),
+        };
+        let v = Version("1.0.219".into());
+        let edits: Vec<(&Dependency, &Version)> = vec![(&dep, &v)];
+
+        let first = eco.write_batch(content, &edits).await.unwrap();
+        let second = eco.write_batch(&first, &edits).await.unwrap();
+        assert_eq!(first, second, "write_batch must be idempotent");
     }
 
     #[test]
@@ -352,9 +512,11 @@ linux-dep = "0.4.5"
             .find(|d| d.coordinate.0 == "workspace-dep")
             .unwrap();
         assert_eq!(ws_dep.constraint.0, "1.2.3");
+        assert_eq!(ws_dep.section, Some("workspace.dependencies".to_string()));
 
         let target_dep = deps.iter().find(|d| d.coordinate.0 == "linux-dep").unwrap();
         assert_eq!(target_dep.constraint.0, "0.4.5");
+        assert!(target_dep.section.as_ref().unwrap().starts_with("target."));
 
         // Test writing back to workspace
         let ws_version = Version("1.2.4".to_string());

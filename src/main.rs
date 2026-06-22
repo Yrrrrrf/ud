@@ -9,7 +9,14 @@ use ud::ecosystems::cargo::CargoEcosystem;
 
 #[derive(Parser)]
 #[command(name = "ud")]
-#[command(version, about = "Up to Date — universal dependency updater", long_about = None)]
+#[command(version, about = "Up to Date — universal dependency updater")]
+#[command(
+    long_about = "ud checks your manifest for outdated dependencies and optionally updates them.\n\n\
+    Exit codes:\n  \
+    0  All dependencies are current (or successfully updated)\n  \
+    1  Outdated dependencies detected (check mode)\n  \
+    2  Hard error (missing file, parse failure, network error)"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -17,9 +24,13 @@ struct Cli {
     /// Path to the manifest file or a directory containing one (defaults to current directory)
     path: Option<PathBuf>,
 
-    /// Update the manifest file losslessly with the new versions
+    /// Update the manifest file losslessly with compatible versions
     #[arg(short = 'u', long)]
     update: bool,
+
+    /// Also apply breaking version bumps when updating (requires --update)
+    #[arg(long = "allow-breaking")]
+    allow_breaking: bool,
 
     /// Include prerelease versions
     #[arg(long = "pre")]
@@ -52,7 +63,8 @@ async fn main() {
             }
         }
         Err(e) => {
-            eprintln!("{:?}", e);
+            // Friendly single-line error messages
+            eprintln!("{} {}", "error:".red().bold(), e);
             std::process::exit(2);
         }
     }
@@ -74,10 +86,12 @@ async fn run() -> miette::Result<bool> {
             cargo_toml
         } else {
             return Err(miette::miette!(
-                "Could not find Cargo.toml in directory {}",
+                "file not found: {}/Cargo.toml",
                 input_path.display()
             ));
         }
+    } else if !input_path.exists() {
+        return Err(miette::miette!("file not found: {}", input_path.display()));
     } else {
         input_path
     };
@@ -99,19 +113,48 @@ async fn run() -> miette::Result<bool> {
     let report = pipeline.run(&manifest_path).await?;
 
     let mut has_outdated = false;
-    for (dep, verdict) in &report.verdicts {
-        if let Verdict::Outdated { target, .. } = verdict {
-            has_outdated = true;
-            if should_update {
-                let content = tokio::fs::read_to_string(&manifest_path)
-                    .await
-                    .map_err(|e| miette::miette!("Could not read manifest: {}", e))?;
 
-                let eco = CargoEcosystem::new();
-                let new_content = eco.write(&content, dep, target).await?;
-                tokio::fs::write(&manifest_path, new_content)
-                    .await
-                    .map_err(|e| miette::miette!("Could not write manifest: {}", e))?;
+    if should_update {
+        // Single-pass update: collect all edits, apply once
+        let mut edits = Vec::new();
+
+        for (dep, verdict) in &report.verdicts {
+            if let Verdict::Outdated {
+                compatible, latest, ..
+            } = verdict
+            {
+                has_outdated = true;
+
+                // Determine the target version based on --allow-breaking
+                let target = if cli.allow_breaking {
+                    Some(latest)
+                } else {
+                    compatible.as_ref()
+                };
+
+                if let Some(version) = target {
+                    edits.push((dep, version));
+                }
+            }
+        }
+
+        if !edits.is_empty() {
+            let content = tokio::fs::read_to_string(&manifest_path)
+                .await
+                .map_err(|e| miette::miette!("could not read manifest: {}", e))?;
+
+            let eco = CargoEcosystem::new();
+            let new_content = eco.write_batch(&content, &edits).await?;
+            tokio::fs::write(&manifest_path, new_content)
+                .await
+                .map_err(|e| miette::miette!("could not write manifest: {}", e))?;
+        }
+    } else {
+        // Check mode: just detect outdated
+        for (_, verdict) in &report.verdicts {
+            if matches!(verdict, Verdict::Outdated { .. }) {
+                has_outdated = true;
+                break;
             }
         }
     }
